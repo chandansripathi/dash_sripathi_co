@@ -9,6 +9,9 @@ services:
       - "3100:3000"
     volumes:
       - ./data:/data
+    networks:
+      - default
+      - proxy
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/servers').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 30s
@@ -39,3 +42,7 @@ services:
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
     command: ["python3", "/opt/nexus_agent.py"]
+
+networks:
+  proxy:
+    external: true
