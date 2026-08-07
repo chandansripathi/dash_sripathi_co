@@ -1,0 +1,41 @@
+services:
+  nexus-dashboard:
+    build:
+      context: .
+    container_name: nexus-dashboard
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "3100:3000"
+    volumes:
+      - ./data:/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/servers').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  nexus-agent:
+    image: python:3.12-slim
+    container_name: nexus-agent
+    restart: unless-stopped
+    depends_on:
+      nexus-dashboard:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      NEXUS_ENDPOINT: http://nexus-dashboard:3000
+      NEXUS_PROC_ROOT: /host/proc
+      NEXUS_SYS_ROOT: /host/sys
+      NEXUS_AGENT_ID: asgard
+      NEXUS_SERVER_NAME: Asgard
+      NEXUS_SERVER_IP: 169.58.96.10
+      NEXUS_SERVER_LOCATION: Contabo
+      NEXUS_SERVER_OS: Debian 12
+      NEXUS_INTERVAL: 60
+    volumes:
+      - ./scripts/nexus_agent.py:/opt/nexus_agent.py:ro
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+    command: ["python3", "/opt/nexus_agent.py"]

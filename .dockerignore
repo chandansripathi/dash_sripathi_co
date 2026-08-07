@@ -1,0 +1,11 @@
+.git
+.next
+.vinext
+dist
+node_modules
+data
+work
+outputs
+.env*
+*.xlsm
+npm-debug.log*
