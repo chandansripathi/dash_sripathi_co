@@ -1,33 +1,36 @@
 # Nexus Infrastructure Dashboard
 
-Nexus is a self-hosted dashboard for domain renewals and live Linux server telemetry. It includes the domain portfolio imported from `Master_Domains_04-08-2026.xlsm`, a responsive web UI, persistent server metrics, and a dependency-free monitoring agent.
+Self-hosted domain and server management with real authentication, PostgreSQL persistence, live agents, Cloudflare DNS viewing, Excel import/export, alerts, and configurable branding.
 
 ## Features
 
-- Domain expiry, registrar, DNS, hosting, renewal cost, search, and alerts
-- Live CPU, RAM, temperature, uptime, load, IP, OS, and server status
-- Token-authenticated telemetry endpoint
-- Persistent JSON storage mounted at `/data`
-- Docker Compose stack suitable for Portainer
-- Automatic Asgard host monitoring through the included agent container
+- First-run administrator setup and Admin / Operator / Viewer roles
+- Secure password hashing, server-side sessions, audit trail, and encrypted API credentials
+- Domain and subdomain CRUD, renewal tracking, Excel `.xlsx` / `.xlsm` import, and Excel export
+- Multiple named Cloudflare API connections, live read-only DNS records, and subdomain sync
+- One-time server enrollment commands and revocable per-server credentials
+- CPU, RAM, temperature, all mounted disks, IPv4, WAN IPv4, uptime, Docker services, and Nginx/Apache/Caddy/NPM route discovery
+- Email and generic webhook alerts for offline servers and domain renewals
+- Light/dark mode plus editable name, colors, fonts, font size, logos, favicon, and login background
 
-## Deploy
+## Deploy with Docker Compose
 
 ```bash
 cp .env.example .env
-openssl rand -hex 32
-# Put the generated value in .env as NEXUS_AGENT_TOKEN
+# Generate strong POSTGRES_PASSWORD and NEXUS_ENCRYPTION_KEY values.
 docker compose up -d --build
 ```
 
-The dashboard listens on host port `3100`. Point Nginx Proxy Manager at `169.58.96.10:3100` for `dash.sripathi.co`.
+Open port `3100`, or connect the `nexus-dashboard` container to your reverse proxy's external Docker network and proxy to `http://nexus-dashboard:3000`.
 
-## Development
+On the first visit, `/setup` creates the administrator. PostgreSQL migrations and the initial workbook-derived domain seed run automatically and idempotently.
 
-```bash
-npm ci
-npm run dev
-npm run build
-```
+## Cloudflare token scope
 
-Never commit `.env`, server passwords, telemetry tokens, or the source Excel workbook.
+Create one or more API tokens with `Zone:Read` and `DNS:Read` for the required zones. Tokens are encrypted with `NEXUS_ENCRYPTION_KEY` and never returned to the browser after saving.
+
+## Alerts
+
+SMTP credentials are read from `.env`. The webhook field accepts services such as Pushcut, Pushover, ntfy, or an automation bridge that can launch an iOS Shortcut.
+
+See [SERVER_AGENT.md](SERVER_AGENT.md) for agent behavior and security notes.

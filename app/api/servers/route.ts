@@ -1,51 +1,30 @@
-import { mutateStore, readServers } from "../../../lib/storage";
-
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
-
-function toPublicServer(server: Awaited<ReturnType<typeof readServers>>[number]) {
-  const metric = server.metrics.at(-1);
-  return {
-    id: server.id,
-    agentId: server.agentId,
-    name: server.name,
-    ip: server.ip,
-    location: server.location,
-    os: server.os,
-    lastSeenAt: server.lastSeenAt,
-    cpu: metric?.cpu ?? 0,
-    ram: metric?.ram ?? 0,
-    temperature: metric?.temperature ?? 0,
-    uptimeSeconds: metric?.uptimeSeconds ?? 0,
-    load1: metric?.load1 ?? null,
-    recordedAt: metric?.recordedAt ?? null,
-  };
-}
+import { NextResponse } from "next/server";
+import { audit, requireUser } from "@/lib/auth";
+import { hashToken, randomToken } from "@/lib/crypto";
+import { query } from "@/lib/db";
 
 export async function GET() {
-  const servers = (await readServers()).map(toPublicServer).sort((a, b) => a.name.localeCompare(b.name));
-  return Response.json({ servers }, { headers: { "Cache-Control": "no-store" } });
+  if (!await requireUser()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const result = await query(`SELECT s.id,s.agent_id,s.name,s.location,s.os,s.ipv4,s.wan_ipv4,s.last_seen_at,s.enrolled_at,s.active,
+    m.cpu,m.ram,m.temperature,m.uptime_seconds,m.load1,m.disks,m.network,m.proxies,m.recorded_at
+    FROM servers s LEFT JOIN LATERAL (SELECT * FROM server_metrics WHERE server_id=s.id ORDER BY recorded_at DESC LIMIT 1) m ON true
+    ORDER BY s.name`);
+  return NextResponse.json({ servers: result.rows });
 }
 
 export async function POST(request: Request) {
-  const body = await request.json() as { name?: string; ip?: string; location?: string; os?: string };
-  if (!body.name?.trim() || !body.ip?.trim()) return Response.json({ error: "name and ip are required" }, { status: 400 });
+  const user = await requireUser(["admin", "operator"]);
+  if (!user) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  const b = await request.json();
+  const enrollmentToken = randomToken(24);
+  const result = await query<{ id: string; agent_id: string }>(`INSERT INTO servers
+    (name,location,os,ipv4,enrollment_token_hash,enrollment_expires_at) VALUES ($1,$2,$3,$4,$5,now()+interval '24 hours') RETURNING id,agent_id`,
+    [b.name, b.location || null, b.os || null, b.ipv4 || b.ip || null, hashToken(enrollmentToken)]);
+  await audit(user.id, "server.create", "server", result.rows[0].id);
+  return NextResponse.json({ ...result.rows[0], enrollmentToken, installCommand: installCommand(result.rows[0].agent_id, enrollmentToken) }, { status: 201 });
+}
 
-  const server = await mutateStore((store) => {
-    const now = Date.now();
-    const created = {
-      id: store.nextServerId++,
-      agentId: crypto.randomUUID(),
-      name: body.name!.trim(),
-      ip: body.ip!.trim(),
-      location: body.location?.trim() || "Unknown",
-      os: body.os?.trim() || "Linux",
-      createdAt: now,
-      lastSeenAt: null,
-      metrics: [],
-    };
-    store.servers.push(created);
-    return created;
-  });
-  return Response.json({ server: toPublicServer(server) }, { status: 201 });
+function installCommand(agentId: string, token: string) {
+  const base = (process.env.NEXUS_PUBLIC_URL || "https://dash.sripathi.co").replace(/\/$/, "");
+  return `curl -fsSL ${base}/api/agent/install | sudo bash -s -- --url ${base} --agent-id ${agentId} --token ${token}`;
 }

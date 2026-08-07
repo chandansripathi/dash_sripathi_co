@@ -1,89 +1,140 @@
 #!/usr/bin/env python3
-"""Tiny Linux monitoring agent for Nexus, using only the standard library."""
+"""Nexus server agent. Standard library only; Linux and systemd friendly."""
 
-import json
-import os
-import platform
-import socket
-import time
-import urllib.error
-import urllib.request
+import json, os, re, shutil, socket, sqlite3, subprocess, time, urllib.request
+from pathlib import Path
 
-PROC_ROOT = os.environ.get("NEXUS_PROC_ROOT", "/proc")
-SYS_ROOT = os.environ.get("NEXUS_SYS_ROOT", "/sys")
+VERSION = "2.0.0"
+CONFIG = Path(os.getenv("NEXUS_AGENT_CONFIG", "/etc/nexus-agent/config.json"))
 
+def read_config():
+    data = json.loads(CONFIG.read_text()) if CONFIG.exists() else {}
+    return {
+        "url": os.getenv("NEXUS_ENDPOINT", data.get("url", "")).rstrip("/"),
+        "agentId": os.getenv("NEXUS_AGENT_ID", data.get("agentId", "")),
+        "agentToken": os.getenv("NEXUS_AGENT_TOKEN", data.get("agentToken", "")),
+        "enrollmentToken": data.get("enrollmentToken", ""),
+        "interval": int(os.getenv("NEXUS_INTERVAL", data.get("interval", 30))),
+    }
 
-def proc_file(name):
-    return os.path.join(PROC_ROOT, name)
+def request_json(url, payload=None, token=None, timeout=12):
+    headers = {"Content-Type": "application/json", "User-Agent": f"NexusAgent/{VERSION}"}
+    if token: headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, data=json.dumps(payload).encode() if payload is not None else None, headers=headers, method="POST" if payload is not None else "GET")
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+        return json.loads(response.read().decode())
 
+def enroll(config):
+    if config["agentToken"]: return config
+    result = request_json(f'{config["url"]}/api/agent/enroll', {"agentId": config["agentId"], "token": config["enrollmentToken"]})
+    saved = {"url": config["url"], "agentId": config["agentId"], "agentToken": result["agentToken"], "interval": config["interval"]}
+    CONFIG.parent.mkdir(parents=True, exist_ok=True)
+    CONFIG.write_text(json.dumps(saved, indent=2))
+    os.chmod(CONFIG, 0o600)
+    return read_config()
 
 def cpu_percent():
     def sample():
-        with open(proc_file("stat"), "r", encoding="utf-8") as handle:
-            values = [int(value) for value in handle.readline().split()[1:]]
-        return sum(values), values[3] + values[4]
-    total_a, idle_a = sample()
-    time.sleep(1)
-    total_b, idle_b = sample()
-    return round(100 * (1 - (idle_b - idle_a) / max(1, total_b - total_a)), 1)
-
+        values = [int(x) for x in Path("/proc/stat").read_text().splitlines()[0].split()[1:]]
+        return sum(values), values[3] + (values[4] if len(values) > 4 else 0)
+    total1, idle1 = sample(); time.sleep(0.2); total2, idle2 = sample()
+    return round(100 * (1 - (idle2-idle1) / max(1, total2-total1)), 2)
 
 def memory_percent():
-    values = {}
-    with open(proc_file("meminfo"), "r", encoding="utf-8") as handle:
-        for line in handle:
-            key, value = line.split(":", 1)
-            values[key] = int(value.strip().split()[0])
-    return round(100 * (1 - values.get("MemAvailable", 0) / values["MemTotal"]), 1)
-
+    info = {}
+    for line in Path("/proc/meminfo").read_text().splitlines():
+        key, value = line.split(":", 1); info[key] = int(value.strip().split()[0])
+    return round(100 * (1 - info.get("MemAvailable", 0) / max(1, info["MemTotal"])), 2)
 
 def temperature():
     readings = []
-    thermal_root = os.path.join(SYS_ROOT, "class", "thermal")
-    for root, _, files in os.walk(thermal_root):
-        for filename in files:
-            if filename == "temp":
-                try:
-                    with open(os.path.join(root, filename), encoding="utf-8") as handle:
-                        value = float(handle.read().strip())
-                    readings.append(value / 1000 if value > 1000 else value)
-                except (OSError, ValueError):
-                    pass
-    return round(max(readings), 1) if readings else 0
+    for item in Path("/sys/class/thermal").glob("thermal_zone*/temp"):
+        try:
+            value = float(item.read_text().strip()); readings.append(value / 1000 if value > 500 else value)
+        except Exception: pass
+    return round(max(readings), 1) if readings else None
 
+def disks():
+    ignored = {"proc","sysfs","tmpfs","devtmpfs","devpts","overlay","squashfs","cgroup","cgroup2","pstore","securityfs","tracefs","debugfs","fusectl","mqueue"}
+    found, output = set(), []
+    for line in Path("/proc/mounts").read_text().splitlines():
+        parts = line.split()
+        if len(parts) < 3 or parts[2] in ignored or not parts[0].startswith("/dev/"): continue
+        mount = parts[1].replace("\\040", " ")
+        if mount in found: continue
+        found.add(mount)
+        try:
+            usage = shutil.disk_usage(mount)
+            output.append({"device": parts[0], "mount": mount, "total": usage.total, "used": usage.used, "free": usage.free, "percent": round(usage.used / max(1, usage.total) * 100, 1)})
+        except OSError: pass
+    return output
 
-def payload():
-    hostname = socket.gethostname()
-    with open(proc_file("uptime"), encoding="utf-8") as handle:
-        uptime_seconds = int(float(handle.read().split()[0]))
-    with open(proc_file("loadavg"), encoding="utf-8") as handle:
-        load1 = float(handle.read().split()[0])
-    return {
-        "agentId": os.environ.get("NEXUS_AGENT_ID", hostname),
-        "name": os.environ.get("NEXUS_SERVER_NAME", hostname),
-        "ip": os.environ.get("NEXUS_SERVER_IP", socket.gethostbyname(hostname)),
-        "location": os.environ.get("NEXUS_SERVER_LOCATION", "Unknown"),
-        "os": os.environ.get("NEXUS_SERVER_OS", f"{platform.system()} {platform.release()}"),
-        "cpu": cpu_percent(), "ram": memory_percent(), "temperature": temperature(),
-        "uptimeSeconds": uptime_seconds, "load1": load1,
-    }
+def local_ipv4():
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try: sock.connect(("1.1.1.1", 80)); return sock.getsockname()[0]
+    except OSError: return None
+    finally: sock.close()
 
+def wan_ipv4():
+    try:
+        with urllib.request.urlopen("https://api.ipify.org?format=json", timeout=5) as response: return json.loads(response.read())["ip"]
+    except Exception: return None
 
-def send():
-    endpoint = os.environ["NEXUS_ENDPOINT"].rstrip("/") + "/api/telemetry"
-    request = urllib.request.Request(
-        endpoint, data=json.dumps(payload()).encode(), method="POST",
-        headers={"Authorization": f"Bearer {os.environ['NEXUS_AGENT_TOKEN']}", "Content-Type": "application/json"},
-    )
-    with urllib.request.urlopen(request, timeout=20) as response:
-        print(response.read().decode(), flush=True)
+def command(args, timeout=8):
+    try: return subprocess.run(args, text=True, capture_output=True, timeout=timeout, check=False).stdout
+    except Exception: return ""
 
+def scan_proxies():
+    routes = []
+    npm_db = Path("/opt/stacks/nginx-proxy-manager/data/database.sqlite")
+    if npm_db.exists():
+        try:
+            db = sqlite3.connect(f"file:{npm_db}?mode=ro", uri=True)
+            for names, host, port, scheme in db.execute("select domain_names,forward_host,forward_port,forward_scheme from proxy_host where enabled=1 and is_deleted=0"):
+                for name in json.loads(names): routes.append({"source":"nginx-proxy-manager","domain":name,"target":f"{scheme}://{host}:{port}"})
+            db.close()
+        except Exception: pass
+    for conf_dir, source in [("/etc/nginx", "nginx"), ("/etc/apache2", "apache")]:
+        root = Path(conf_dir)
+        if not root.exists(): continue
+        for path in list(root.rglob("*.conf"))[:300]:
+            try:
+                text = path.read_text(errors="ignore")
+                pattern = r"server_name\s+([^;]+)" if source == "nginx" else r"ServerName\s+([^\s#]+)"
+                for match in re.findall(pattern, text):
+                    for name in match.split(): routes.append({"source":source,"domain":name,"path":str(path)})
+            except OSError: pass
+    caddy = Path("/etc/caddy/Caddyfile")
+    if caddy.exists():
+        for match in re.findall(r"(?m)^([\w.*-]+\.[\w.-]+)(?::\d+)?\s*\{", caddy.read_text(errors="ignore")):
+            routes.append({"source":"caddy","domain":match,"path":str(caddy)})
+    docker_rows = command(["docker", "ps", "--format", "{{json .}}"])
+    for line in docker_rows.splitlines():
+        try:
+            item = json.loads(line); routes.append({"source":"docker","service":item.get("Names"),"target":item.get("Ports"),"image":item.get("Image")})
+        except Exception: pass
+    unique = {json.dumps(item, sort_keys=True): item for item in routes}
+    return list(unique.values())[:500]
 
-if __name__ == "__main__":
-    interval = max(15, int(os.environ.get("NEXUS_INTERVAL", "60")))
+def os_name():
+    try:
+        values = dict(line.split("=",1) for line in Path("/etc/os-release").read_text().splitlines() if "=" in line)
+        return values.get("PRETTY_NAME", "Linux").strip('"')
+    except Exception: return "Linux"
+
+def payload(config):
+    uptime = float(Path("/proc/uptime").read_text().split()[0])
+    load = os.getloadavg()[0] if hasattr(os, "getloadavg") else None
+    return {"agentId":config["agentId"],"agentVersion":VERSION,"cpu":cpu_percent(),"ram":memory_percent(),
+        "temperature":temperature(),"uptimeSeconds":round(uptime),"load1":load,"disks":disks(),"ipv4":local_ipv4(),
+        "wanIpv4":wan_ipv4(),"os":os_name(),"network":{},"proxies":scan_proxies()}
+
+def main():
+    config = enroll(read_config())
     while True:
         try:
-            send()
-        except (OSError, ValueError, urllib.error.URLError) as error:
-            print(f"Nexus agent error: {error}", flush=True)
-        time.sleep(interval)
+            print(request_json(f'{config["url"]}/api/telemetry', payload(config), config["agentToken"]))
+        except Exception as error: print(f"Nexus telemetry error: {error}", flush=True)
+        time.sleep(max(10, config["interval"]))
+
+if __name__ == "__main__": main()

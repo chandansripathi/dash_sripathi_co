@@ -1,15 +1,11 @@
 import { redirect } from "next/navigation";
-import { getUser } from "@/lib/auth";
 import { query } from "@/lib/db";
-import Dashboard from "./dashboard";
+import AuthForm from "../auth-form";
 
 export const dynamic = "force-dynamic";
-
-export default async function Home() {
+export default async function Setup() {
   const count = Number((await query<{ count: string }>("SELECT count(*) AS count FROM users")).rows[0].count);
-  if (!count) redirect("/setup");
-  const user = await getUser();
-  if (!user) redirect("/login");
+  if (count) redirect("/login");
   const branding = (await query("SELECT * FROM branding WHERE id=1")).rows[0];
-  return <Dashboard initialUser={user} initialBranding={branding} />;
+  return <AuthForm setup branding={branding} />;
 }
