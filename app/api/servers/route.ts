@@ -5,7 +5,7 @@ import { query } from "@/lib/db";
 
 export async function GET() {
   if (!await requireUser()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  const result = await query(`SELECT s.id,s.agent_id,s.name,s.location,s.os,s.ipv4,s.wan_ipv4,s.last_seen_at,s.enrolled_at,s.active,
+  const result = await query(`SELECT s.id,s.agent_id,s.name,s.location,s.os,s.ipv4,s.wan_ipv4,s.last_seen_at,s.enrolled_at,s.active,s.icon_path,s.refresh_interval_ms,
     m.cpu,m.ram,m.temperature,m.uptime_seconds,m.load1,m.disks,m.network,m.proxies,m.recorded_at
     FROM servers s LEFT JOIN LATERAL (SELECT * FROM server_metrics WHERE server_id=s.id ORDER BY recorded_at DESC LIMIT 1) m ON true
     ORDER BY s.name`);

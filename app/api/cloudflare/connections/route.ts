@@ -26,3 +26,15 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Token validation failed" }, { status: 400 });
   }
 }
+
+export async function DELETE(request: Request) {
+  const user = await requireUser(["admin"]);
+  if (!user) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  const id = new URL(request.url).searchParams.get("id");
+  if (!id) return NextResponse.json({ error: "Connection id is required" }, { status: 400 });
+  await query("UPDATE domains SET cloudflare_connection_id=NULL,cloudflare_zone_id=NULL,updated_at=now() WHERE cloudflare_connection_id=$1", [id]);
+  const result = await query("DELETE FROM cloudflare_connections WHERE id=$1 RETURNING id", [id]);
+  if (!result.rowCount) return NextResponse.json({ error: "Connection not found" }, { status: 404 });
+  await audit(user.id, "cloudflare.delete", "cloudflare_connection", id);
+  return NextResponse.json({ ok: true });
+}

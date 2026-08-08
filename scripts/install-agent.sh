@@ -17,7 +17,7 @@ install -d -m 700 /etc/nexus-agent /opt/nexus-agent
 curl -fsSL "$URL/api/agent/script" -o /opt/nexus-agent/nexus_agent.py
 chmod 755 /opt/nexus-agent/nexus_agent.py
 umask 077
-printf '{"url":"%s","agentId":"%s","enrollmentToken":"%s","interval":30}\n' "$URL" "$AGENT_ID" "$TOKEN" > /etc/nexus-agent/config.json
+printf '{"url":"%s","agentId":"%s","enrollmentToken":"%s","intervalMs":1000}\n' "$URL" "$AGENT_ID" "$TOKEN" > /etc/nexus-agent/config.json
 cat > /etc/systemd/system/nexus-agent.service <<'EOF'
 [Unit]
 Description=Nexus infrastructure monitoring agent

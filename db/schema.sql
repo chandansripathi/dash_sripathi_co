@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash text NOT NULL,
   role text NOT NULL DEFAULT 'viewer' CHECK (role IN ('admin','operator','viewer')),
   active boolean NOT NULL DEFAULT true,
+  avatar_path text,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
@@ -100,9 +101,15 @@ CREATE TABLE IF NOT EXISTS servers (
   last_seen_at timestamptz,
   agent_version text,
   active boolean NOT NULL DEFAULT true,
+  icon_path text,
+  refresh_interval_ms integer NOT NULL DEFAULT 1000 CHECK (refresh_interval_ms BETWEEN 1000 AND 300000),
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_path text;
+ALTER TABLE servers ADD COLUMN IF NOT EXISTS icon_path text;
+ALTER TABLE servers ADD COLUMN IF NOT EXISTS refresh_interval_ms integer NOT NULL DEFAULT 1000;
 
 CREATE TABLE IF NOT EXISTS server_metrics (
   id bigserial PRIMARY KEY,

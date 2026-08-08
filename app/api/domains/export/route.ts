@@ -6,13 +6,15 @@ import { query } from "@/lib/db";
 export async function GET() {
   if (!await requireUser()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const [domains, subdomains] = await Promise.all([
-    query("SELECT name,tld,provider,current_price,registered_at,last_renewed_at,expires_at,renewal_price,currency,hosting,dns_provider,free_tier,notes FROM domains ORDER BY name"),
+    query(`SELECT d.name,d.tld,d.provider,d.current_price,d.registered_at,d.last_renewed_at,d.expires_at,d.renewal_price,d.currency,d.hosting,d.dns_provider,d.free_tier,d.notes,
+      c.name AS cloudflare_connection,c.account_hint AS cloudflare_account_hint,''::text AS cloudflare_api_token
+      FROM domains d LEFT JOIN cloudflare_connections c ON c.id=d.cloudflare_connection_id ORDER BY d.name`),
     query("SELECT d.name AS domain,s.name,s.dns_name,s.record_type,s.service,s.host,s.path,s.ipv4,s.proxied,s.source,s.notes FROM subdomains s JOIN domains d ON d.id=s.domain_id ORDER BY d.name,s.name"),
   ]);
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "Nexus";
   const domainSheet = workbook.addWorksheet("Domains", { views: [{ state: "frozen", ySplit: 1 }] });
-  domainSheet.columns = ["Domain","TLD","Provider","Current Price","Registered","Last Renewed","Expires","Renewal Price","Currency","Hosting","DNS Provider","Free Tier","Notes"].map((header) => ({ header, key: header, width: 20 }));
+  domainSheet.columns = ["Domain","TLD","Provider","Current Price","Registered","Last Renewed","Expires","Renewal Price","Currency","Hosting","DNS Provider","Free Tier","Notes","Cloudflare Connection","Cloudflare Account Hint","Cloudflare API Token"].map((header) => ({ header, key: header, width: 22 }));
   domains.rows.forEach((row) => domainSheet.addRow(Object.values(row)));
   domainSheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } }; domainSheet.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF2563EB" } };
   const subSheet = workbook.addWorksheet("Subdomains", { views: [{ state: "frozen", ySplit: 1 }] });

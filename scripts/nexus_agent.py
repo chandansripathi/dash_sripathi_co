@@ -4,7 +4,7 @@
 import json, os, re, shutil, socket, sqlite3, subprocess, time, urllib.request
 from pathlib import Path
 
-VERSION = "2.0.0"
+VERSION = "3.0.0"
 CONFIG = Path(os.getenv("NEXUS_AGENT_CONFIG", "/etc/nexus-agent/config.json"))
 
 def read_config():
@@ -14,7 +14,7 @@ def read_config():
         "agentId": os.getenv("NEXUS_AGENT_ID", data.get("agentId", "")),
         "agentToken": os.getenv("NEXUS_AGENT_TOKEN", data.get("agentToken", "")),
         "enrollmentToken": data.get("enrollmentToken", ""),
-        "interval": int(os.getenv("NEXUS_INTERVAL", data.get("interval", 30))),
+        "intervalMs": int(os.getenv("NEXUS_INTERVAL_MS", data.get("intervalMs", int(data.get("interval", 1)) * 1000))),
     }
 
 def request_json(url, payload=None, token=None, timeout=12):
@@ -27,7 +27,7 @@ def request_json(url, payload=None, token=None, timeout=12):
 def enroll(config):
     if config["agentToken"]: return config
     result = request_json(f'{config["url"]}/api/agent/enroll', {"agentId": config["agentId"], "token": config["enrollmentToken"]})
-    saved = {"url": config["url"], "agentId": config["agentId"], "agentToken": result["agentToken"], "interval": config["interval"]}
+    saved = {"url": config["url"], "agentId": config["agentId"], "agentToken": result["agentToken"], "intervalMs": config["intervalMs"]}
     CONFIG.parent.mkdir(parents=True, exist_ok=True)
     CONFIG.write_text(json.dumps(saved, indent=2))
     os.chmod(CONFIG, 0o600)
@@ -122,19 +122,27 @@ def os_name():
         return values.get("PRETTY_NAME", "Linux").strip('"')
     except Exception: return "Linux"
 
-def payload(config):
+def payload(config, inventory):
     uptime = float(Path("/proc/uptime").read_text().split()[0])
     load = os.getloadavg()[0] if hasattr(os, "getloadavg") else None
     return {"agentId":config["agentId"],"agentVersion":VERSION,"cpu":cpu_percent(),"ram":memory_percent(),
         "temperature":temperature(),"uptimeSeconds":round(uptime),"load1":load,"disks":disks(),"ipv4":local_ipv4(),
-        "wanIpv4":wan_ipv4(),"os":os_name(),"network":{},"proxies":scan_proxies()}
+        "wanIpv4":inventory.get("wanIpv4"),"os":os_name(),"network":{},"proxies":inventory.get("proxies", [])}
 
 def main():
     config = enroll(read_config())
+    inventory, inventory_at = {}, 0
     while True:
+        started = time.monotonic()
         try:
-            print(request_json(f'{config["url"]}/api/telemetry', payload(config), config["agentToken"]))
+            if time.monotonic() - inventory_at > 60:
+                inventory = {"wanIpv4": wan_ipv4(), "proxies": scan_proxies()}
+                inventory_at = time.monotonic()
+            result = request_json(f'{config["url"]}/api/telemetry', payload(config, inventory), config["agentToken"])
+            config["intervalMs"] = max(1000, min(300000, int(result.get("intervalMs", config["intervalMs"]))))
+            print(result, flush=True)
         except Exception as error: print(f"Nexus telemetry error: {error}", flush=True)
-        time.sleep(max(10, config["interval"]))
+        elapsed = (time.monotonic() - started) * 1000
+        time.sleep(max(0.05, (config["intervalMs"] - elapsed) / 1000))
 
 if __name__ == "__main__": main()

@@ -5,7 +5,7 @@ import { query } from "@/lib/db";
 
 export async function GET() {
   if (!await requireUser(["admin"])) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  const result = await query("SELECT id,name,email,role,active,created_at FROM users ORDER BY created_at");
+  const result = await query("SELECT id,name,email,role,active,avatar_path,created_at FROM users ORDER BY created_at");
   return NextResponse.json({ users: result.rows });
 }
 

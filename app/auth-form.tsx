@@ -1,5 +1,5 @@
 "use client";
-import { FormEvent, useState } from "react";
+import { FormEvent, useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 
 export default function AuthForm({ setup, branding }: { setup?: boolean; branding: Record<string, string | number | null> }) {
@@ -15,7 +15,8 @@ export default function AuthForm({ setup, branding }: { setup?: boolean; brandin
     if (!response.ok) { setError(data.error || "Unable to continue"); setBusy(false); return; }
     router.push("/"); router.refresh();
   }
-  return <main className="auth-page" style={{ backgroundImage: branding.login_background_path ? `linear-gradient(120deg,rgba(5,10,24,.86),rgba(5,10,24,.5)),url(${branding.login_background_path})` : undefined }}>
+  const style = { "--primary": String(branding.primary_color || "#2563eb"), "--accent": String(branding.accent_color || "#7c3aed"), "--font": String(branding.font_family || "Inter"), "--base-size": `${branding.base_font_size || 15}px`, backgroundImage: branding.login_background_path ? `linear-gradient(120deg,rgba(5,10,24,.86),rgba(5,10,24,.5)),url(${branding.login_background_path})` : undefined } as CSSProperties;
+  return <main className="auth-page" style={style}>
     <section className="auth-card">
       {branding.login_logo_path ? <img className="login-logo" src={String(branding.login_logo_path)} alt="" /> : <div className="auth-mark">N</div>}
       <p className="eyebrow">{setup ? "First-run setup" : branding.brand_tagline}</p>
